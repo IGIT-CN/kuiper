@@ -12,6 +12,7 @@ import (
 	"hash"
 	"io"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -192,7 +193,18 @@ func hashCall(name string, args []interface{}) (interface{}, bool) {
 func otherCall(name string, args []interface{}) (interface{}, bool) {
 	switch name {
 	case "isnull":
-		return args[0] == nil, true
+		if args[0] == nil {
+			return true, true
+		} else {
+			v := reflect.ValueOf(args[0])
+			switch v.Kind() {
+			case reflect.Slice, reflect.Map:
+				return v.IsNil(), true
+			default:
+				return false, true
+			}
+		}
+		return false, true
 	case "newuuid":
 		if uuid, err := uuid.NewUUID(); err != nil {
 			return err, false
@@ -206,6 +218,8 @@ func otherCall(name string, args []interface{}) (interface{}, bool) {
 			return v, true
 		}
 		return nil, false
+	case "meta":
+		return args[0], true
 	default:
 		return fmt.Errorf("unknown function name %s", name), false
 	}

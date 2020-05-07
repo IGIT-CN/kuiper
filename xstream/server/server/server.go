@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"github.com/emqx/kuiper/common"
+	"github.com/emqx/kuiper/plugins"
 	"github.com/emqx/kuiper/xsql/processors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net"
@@ -17,6 +18,7 @@ var (
 
 	ruleProcessor   *processors.RuleProcessor
 	streamProcessor *processors.StreamProcessor
+	pluginManager   *plugins.Manager
 )
 
 func StartUp(Version string) {
@@ -31,6 +33,10 @@ func StartUp(Version string) {
 	}
 	ruleProcessor = processors.NewRuleProcessor(path.Dir(dataDir))
 	streamProcessor = processors.NewStreamProcessor(path.Join(path.Dir(dataDir), "stream"))
+	pluginManager, err = plugins.NewPluginManager()
+	if err != nil {
+		logger.Panic(err)
+	}
 
 	registry = &RuleRegistry{internal: make(map[string]*RuleState)}
 
@@ -61,7 +67,9 @@ func StartUp(Version string) {
 	// Listen to TPC connections on port 1234
 	listener, e := net.Listen("tcp", fmt.Sprintf(":%d", common.Config.Port))
 	if e != nil {
-		logger.Fatal("Listen error: ", e)
+		m := fmt.Sprintf("Listen error: %s", e)
+		fmt.Printf(m)
+		logger.Fatal(m)
 	}
 
 	if common.Config.Prometheus {

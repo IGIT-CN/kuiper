@@ -71,7 +71,9 @@ func (p *StreamProcessor) execCreateStream(stmt *xsql.StreamStmt, statement stri
 	if err != nil {
 		return "", fmt.Errorf("Create stream fails: %v.", err)
 	} else {
-		return fmt.Sprintf("Stream %s is created.", stmt.Name), nil
+		info := fmt.Sprintf("Stream %s is created.", stmt.Name)
+		log.Printf("%s", info)
+		return info, nil
 	}
 }
 
@@ -110,7 +112,7 @@ func (p *StreamProcessor) execDescribeStream(stmt *xsql.DescribeStreamStatement)
 	buff.WriteString("Fields\n--------------------------------------------------------------------------------\n")
 	for _, f := range streamStmt.StreamFields {
 		buff.WriteString(f.Name + "\t")
-		xsql.PrintFieldType(f.FieldType, &buff)
+		buff.WriteString(xsql.PrintFieldType(f.FieldType))
 		buff.WriteString("\n")
 	}
 	buff.WriteString("\n")
@@ -229,7 +231,7 @@ func (p *RuleProcessor) GetRuleByName(name string) (*api.Rule, error) {
 		return nil, err
 	}
 	defer p.db.Close()
-	s, f := p.db.Get(string(name))
+	s, f := p.db.Get(name)
 	if !f {
 		return nil, fmt.Errorf("Rule %s is not found.", name)
 	}
@@ -313,21 +315,6 @@ func (p *RuleProcessor) ExecDesc(name string) (string, error) {
 	}
 
 	return fmt.Sprintln(dst.String()), nil
-}
-
-func (p *RuleProcessor) ExecShow() (string, error) {
-	keys, err := p.GetAllRules()
-	if err != nil {
-		return "", err
-	}
-	if len(keys) == 0 {
-		keys = append(keys, "No rule definitions are found.")
-	}
-	var result string
-	for _, c := range keys {
-		result = result + fmt.Sprintln(c)
-	}
-	return result, nil
 }
 
 func (p *RuleProcessor) GetAllRules() ([]string, error) {

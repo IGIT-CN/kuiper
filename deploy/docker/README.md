@@ -29,16 +29,25 @@
 
 # Image Variants
 
-The `emqx/kuiper` images come in many flavors, each designed for a specific operate systems.
+The `emqx/kuiper` images come in many flavors, each designed for a specific use case.
 
 ## `emqx/kuiper:<tag>`
 
-This is a stable release image that you can use with confidence.
+This is the defacto image, which is based on Debian and it also includes a Golang build environment. If you are unsure about what your needs  are, you probably want to use this one. It is designed to be used both as a throw away container (mount your source code, compile plugins for Kuiper,  and start the  container to run your app), as well as the base to build other images.
 
-## `emqx/kuiper:<tag>-<number>-<commit>`
+Notice: This image is the equivalent to development image of `x.x.x-dev` in 0.3.x versions.
 
-This is an unstable version. It is an image built according to the commit number. You can use it to experience the latest features.
+## `emqx/kuiper:<tag>-slim`
 
+This image is also based on Debian, and only contains the minimal packages needed to run `kuiper`. The difference between with previous image (`emqx/kuiper:<tag>`) is that this image does not include Golang development environment. The typical usage of this image would be deploy the plugins compiled in previous Docker image instances.
+
+## `emqx/kuiper:<tag>-alpine`
+
+This image is based on the popular [Alpine Linux project](http://alpinelinux.org), available in [the `alpine` official image](https://hub.docker.com/_/alpine). Alpine Linux is much smaller than most distribution base images (~5MB), and thus leads to much slimmer images in general. 
+
+This variant is highly recommended when final image size being as  small as possible is desired. The main caveat to note is that it does  use [musl libc](http://www.musl-libc.org) instead of [glibc and friends](http://www.etalabs.net/compare_libcs.html), so certain software might run into issues depending on the depth of  their libc requirements. However, most software doesn't have an issue  with this, so this variant is usually a very safe choice. See [this Hacker News comment thread](https://news.ycombinator.com/item?id=10782897) for more discussion of the issues that might arise and some pro/con comparisons of using Alpine-based images.
+
+To minimize image size, it's uncommon for additional related tools (such as `git` or `bash`) to be included in Alpine-based images. Using this image as a base, add the things you need in your own Dockerfile (see the [`alpine` image description](https://hub.docker.com/_/alpine/) for examples of how to install packages if you are unfamiliar).
 
 # What is Kuiper
 
@@ -144,19 +153,70 @@ docker run -d --name kuiper -e MQTT_BROKER_ADDRESS=$MQTT_BROKER_ADDRESS emqx/kui
 
 ### Configuration
 
-Use the environment variable to configure `etc/sources/mqtt.yaml`  on the Kuiper container.
+Use the environment variable to configure `etc/client.yaml`  on the Kuiper container.
 
-| Options                    | Default            | Mapped                    |
-| ---------------------------| ------------------ | ------------------------- |
-| MQTT_BROKER_ADDRESS         | tcp://127.0.0.1:1883 | default.servers |
-| MQTT_BROKER_SHARED_SUBSCRIPTION | true   | default.sharedSubscription |
-| MQTT_BROKER_QOS | 1                 | default.qos    |
-| MQTT_BROKER_USERNAME |   | default.username |
-| MQTT_BROKER_PASSWORD |                | default.password |
-| MQTT_BROKER_CER_PATH |                | default.certificationPath |
-| MQTT_BROKER_KEY_PATH |     | default.privateKeyPath |
+| Options                         | Default               | Mapped                      |
+| ------------------------------- | --------------------- | --------------------------- |
+| CLIENT_HOST                     | 127.0.0.1             | client.basic.debug          |
+| CLIENT_PORT                     | 20498                 | client.basic.port           |
 
-If you want to configure more options, you can mount the configuration file into Kuiper container.
+Use the environment variable to configure `etc/kuiper.yaml`  on the Kuiper container.
+
+| Options                         | Default               | Mapped                      |
+| ------------------------------- | --------------------- | --------------------------- |
+| KUIPER_DEBUG                    | false                 | kuiper.basic.debug          |
+| KUIPER_CONSOLE_LOG              | false                 | kuiper.basic.consoleLog     |
+| KUIPER_FILE_LOG                 | true                  | kuiper.basic.fileLog        |
+| KUIPER_PORT                     | 20498                 | kuiper.basic.port           |
+| KUIPER_REST_PORT                | 9081                  | kuiper.basic.restPort       |
+| KUIPER_PROMETHEUS               | false                 | kuiper.basic.prometheus     |
+| KUIPER_PROMETHEUS_PORT          | 20499                 | kuiper.basic.prometheusPort |
+
+Use the environment variable to configure `etc/mqtt_sources.yaml`  on the Kuiper container.
+
+| Options                         | Default               | Mapped                      |
+| ------------------------------- | --------------------- | --------------------------- |
+| MQTT_BROKER_ADDRESS             | tcp://127.0.0.1:1883  | default.servers             |
+| MQTT_BROKER_SHARED_SUBSCRIPTION | true                  | default.sharedSubscription  |
+| MQTT_BROKER_QOS                 | 1                     | default.qos                 |
+| MQTT_BROKER_USERNAME            |                       | default.username            |
+| MQTT_BROKER_PASSWORD            |                       | default.password            |
+| MQTT_BROKER_CER_PATH            |                       | default.certificationPath   |
+| MQTT_BROKER_KEY_PATH            |                       | default.privateKeyPath      |
+
+Use the environment variable to configure `etc/sources/edgex.yaml`  on the Kuiper container.
+
+| Options                    | Default                  | Mapped                    |
+| ---------------------------| -------------------------| ------------------------- |
+| EDGEX_PROTOCOL             | tcp                      | default.protocol          |
+| EDGEX_SERVER               | localhost                | default.server            |
+| EDGEX_PORT                 | 5563                     | default.port              |
+| EDGEX_TOPIC                | events                   | default.topic             |
+| EDGEX_SERVICE_SERVER       | http://localhost:48080   | default.serviceServer     |
+
+All of the environment variable should be set with corresponding values that configured in file ``cmd/core-data/res/configuration.toml`` of EdgeX core-data service, as listed in below.
+
+```
+[MessageQueue]
+Protocol = 'tcp'
+Host = '*'
+Port = 5563
+Type = 'zero'
+Topic = 'events'
+```
+
+```
+[Service]
+...
+Host = 'localhost'
+Port = 48080
+...
+```
+
+If you want to configure more options, you can mount the configuration file into Kuiper container, like this:
+```
+$ docker run --name kuiper -v /path/to/mqtt_sources.yaml:/kuiper/etc/mqtt_sources.yaml -v /path/to/edgex.yaml:/kuiper/etc/sources/edgex.yaml emqx/kuiper:$tag
+```
 
 # More
 

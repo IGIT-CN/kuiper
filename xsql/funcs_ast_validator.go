@@ -2,7 +2,7 @@ package xsql
 
 import (
 	"fmt"
-	"github.com/emqx/kuiper/common/plugin_manager"
+	"github.com/emqx/kuiper/plugins"
 	"github.com/emqx/kuiper/xstream/api"
 	"strings"
 )
@@ -26,7 +26,7 @@ func validateFuncs(funcName string, args []Expr) error {
 	} else if _, ok := aggFuncMap[lowerName]; ok {
 		return validateAggFunc(lowerName, args)
 	} else {
-		if nf, err := plugin_manager.GetPlugin(funcName, "functions"); err != nil {
+		if nf, err := plugins.GetPlugin(funcName, plugins.FUNCTION); err != nil {
 			return err
 		} else {
 			f, ok := nf.(api.Function)
@@ -294,13 +294,33 @@ func validateOtherFunc(name string, args []Expr) error {
 			return err
 		}
 		if isIntegerArg(args[0]) || isTimeArg(args[0]) || isBooleanArg(args[0]) || isStringArg(args[0]) || isFloatArg(args[0]) {
-			return produceErrInfo(name, 0, "field reference")
+			return produceErrInfo(name, 0, "meta reference")
 		}
-		if p, ok := args[0].(*FieldRef); ok {
-			if _, ok := SpecialKeyMapper[p.Name]; !ok {
+		if p, ok := args[0].(*MetaRef); ok {
+			name := strings.ToLower(p.Name)
+			if name != "topic" && name != "messageid" {
 				return fmt.Errorf("Parameter of mqtt function can be only topic or messageid.")
 			}
 		}
+	case "meta":
+		if err := validateLen(name, 1, len); err != nil {
+			return err
+		}
+		if _, ok := args[0].(*MetaRef); ok {
+			return nil
+		}
+		expr := args[0]
+		for {
+			if be, ok := expr.(*BinaryExpr); ok {
+				if _, ok := be.LHS.(*MetaRef); ok && be.OP == ARROW {
+					return nil
+				}
+				expr = be.LHS
+			} else {
+				break
+			}
+		}
+		return produceErrInfo(name, 0, "meta reference")
 	}
 	return nil
 }

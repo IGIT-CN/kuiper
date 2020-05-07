@@ -51,7 +51,7 @@ Below is the contents of ``rule.txt``.
 
 ## show rules
 
-The command is used for displaying all of rules defined in the server.
+The command is used for displaying all of rules defined in the server with a brief status.
 
 ```shell
 show rules
@@ -61,8 +61,16 @@ Sample:
 
 ```shell
 # bin/cli show rules
-rule1
-rule2
+[
+  {
+    "id": "rule1",
+    "status": "Running"
+  },
+  {
+     "id": "rule2",
+     "status": "Stopped: canceled by error."
+  }
+]
 ```
 
 ## describe a rule
@@ -105,7 +113,7 @@ Sample:
 
 ```shell
 # bin/cli drop rule rule1
-rule rule1 dropped
+Rule rule1 is dropped.
 ```
 
 ## start a rule
@@ -120,7 +128,7 @@ Sample:
 
 ```shell
 # bin/cli start rule rule1
-rule rule1 started
+Rule rule1 was started.
 ```
 
 ## stop a rule
@@ -135,7 +143,7 @@ Sample:
 
 ```shell
 # bin/cli stop rule rule1
-rule rule1 stopped
+Rule rule1 was stopped.
 ```
 
 ## restart a rule
@@ -150,13 +158,13 @@ Sample:
 
 ```shell
 # bin/cli restart rule rule1
-rule rule1 restarted
+Rule rule1 was restarted.
 ```
 
 ## get the status of a rule
 
 The command is used to get the status of the rule. If the rule is running, the metrics will be retrieved realtime. The status can be
-- running with metrics: $metrics
+- $metrics
 - stopped: $reason
 
 ```shell
@@ -167,7 +175,6 @@ Sample:
 
 ```shell
 # bin/cli getstatus rule rule1
-running with metrics:
 {
     "source_demo_0_records_in_total":5,
     "source_demo_0_records_out_total":5,
