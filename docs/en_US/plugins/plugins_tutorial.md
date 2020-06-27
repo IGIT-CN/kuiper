@@ -58,37 +58,45 @@ The Kuiper plugin has three types. The source code can be put into the correspon
 - Create file mysql.go under the sinks directory
 - Edit file mysql.go for implementing the plugin
     -  Implement [api.Sink](https://github.com/emqx/kuiper/blob/master/xstream/api/stream.go) interface
-    - Export Symbol: Mysql
+    - Export Symbol: Mysql. It could be a constructor function so that each rule can instantiate an own mysql plugin instance. Or it could be the struct which means every rule will share a singleton of the plugin. If the plugin has states like the connection, the first approach is preferred.
 - Edit go.mod, add Mysql driver module
 
 The complete source code of mysql.go is as follows:
 ```go
 package main
 
+// This is a simplified mysql sink which is for test and tutorial only
+
 import (
 	"database/sql"
 	"fmt"
+	"github.com/emqx/kuiper/common"
 	"github.com/emqx/kuiper/xstream/api"
 	_ "github.com/go-sql-driver/mysql"
 )
 
-type mysqlSink struct {
-	url       string
-	table     string
+type mysqlConfig struct {
+	Url   string `json:"url"`
+	Table string `json:"table"`
+}
 
-	db        *sql.DB
+type mysqlSink struct {
+	conf *mysqlConfig
+	//The db connection instance
+	db   *sql.DB
 }
 
 func (m *mysqlSink) Configure(props map[string]interface{}) error {
-	if i, ok := props["url"]; ok {
-		if i, ok := i.(string); ok {
-			m.url = i
-		}
+	cfg := &mysqlConfig{}
+	err := common.MapToStruct(props, cfg)
+	if err != nil {
+		return fmt.Errorf("read properties %v fail with error: %v", props, err)
 	}
-	if i, ok := props["table"]; ok {
-		if i, ok := i.(string); ok {
-			m.table = i
-		}
+	if cfg.Url == "" {
+		return fmt.Errorf("property Url is required")
+	}
+	if cfg.Table == "" {
+		return fmt.Errorf("property Table is required")
 	}
 	return nil
 }
@@ -96,15 +104,20 @@ func (m *mysqlSink) Configure(props map[string]interface{}) error {
 func (m *mysqlSink) Open(ctx api.StreamContext) (err error) {
 	logger := ctx.GetLogger()
 	logger.Debug("Opening mysql sink")
-	m.db, err = sql.Open("mysql", m.url)
+	m.db, err = sql.Open("mysql", m.conf.Url)
 	return
 }
 
+// This is a simplified version of data collect which just insert the received string into hardcoded name column of the db
 func (m *mysqlSink) Collect(ctx api.StreamContext, item interface{}) error {
 	logger := ctx.GetLogger()
 	if v, ok := item.([]byte); ok {
+		//TODO in production: deal with various data type of the unmarshalled item.
+		// It is a json string of []map[string]interface{} by default;
+		// And it is possible to be any other kind of data if the sink `dataTemplate` is set
 		logger.Debugf("mysql sink receive %s", item)
-		sql := fmt.Sprintf("INSERT INTO %s (`name`) VALUES ('%s')", m.table, v)
+		//TODO hard coded column here. In production, we'd better get the column/value pair from the item
+		sql := fmt.Sprintf("INSERT INTO %s (`name`) VALUES ('%s')", m.conf.Table, v)
 		logger.Debugf(sql)
 		insert, err := m.db.Query(sql)
 		if err != nil {
@@ -118,13 +131,16 @@ func (m *mysqlSink) Collect(ctx api.StreamContext, item interface{}) error {
 }
 
 func (m *mysqlSink) Close(ctx api.StreamContext) error {
-	if m.db != nil{
-		m.db.Close()
+	if m.db != nil {
+		return m.db.Close()
 	}
 	return nil
 }
 
-var Mysql mysqlSink
+// export the constructor function to be used to instantiates the plugin
+func Mysql() api.Sink {
+	return &mysqlSink{}
+}
 ```
  The complete code of go.mod is as follows:
  ```go
@@ -156,7 +172,7 @@ Developers can locally compile Kuiper and the plugin for debugging, which steps 
 
 ### Docker compile
 
-From 0.3.0, Kuiper provides development docker image (`kuiper:x.x.x-dev`). Compared with the running version, the development version provides the development environment of Go, which lets users compile the plugin that can be completely compatible with the officially published version of Kuiper. The compiling steps in docker are as follows:
+Kuiper provides different docker images for different purpose. The development docker image should be used for compiling plugins. From 0.4.0, the kuiper image with tag x.x.x (e.g. `kuiper:0.4.0`) is the development docker image. For 0.3.x, kuiper image with tag x.x.x-dev (e.g. `kuiper:0.3.0-dev`) is the development docker image. Compared with the running version, the development version provides the development environment of Go, which lets users compile the plugin that can be completely compatible with the officially published version of Kuiper. The compiling steps in docker are as follows:
 1. Run docker of the development version of Kuiper. Users need to mount the local plugin directory to the directory in docker, and then they can access and compile the plugin project in docker. The author's plugin project is located in the local `/var/git` directory. We map the local directory `/var/git` to the `/home` directory in docker by using the following commands.
     ```go
     docker run -d --name kuiper-dev --mount type=bind,source=/var/git,target=/home emqx/kuiper:0.3.0-dev
@@ -208,6 +224,7 @@ Please refer [Docker compile](#docker编译) for the compilation process.
 Users can use [REST API](https://github.com/emqx/kuiper/blob/master/docs/en_US/restapi/plugins.md) or [CLI](https://github.com/emqx/kuiper/blob/master/docs/en_US/cli/plugins.md) to manage plugins. The following takes the REST API as an example to deploy the plugin compiled in the previous step to the production environment. 
 
 1. Package the plugin and put it into the http server. Package the file `.so` of the plugin compiled in the previous step and the default configuration file (only required for source) `.yaml` into a `.zip` file (assuming that the file is `mysqlSink.zip`). Put this file into the http server that the production environment can also access. 
+    - Some plugin may depend on libs that are not installed on Kuiper environment. The user can either install them manually in the Kuiper server or put the install script and dependencies in the plugin zip and let the plugin management system do the installation. Please refer to [ Plugin File Format](../restapi/plugins.md#plugin-file-format) for detail.
 2. Use REST API to create plugins:
    ```
    POST http://{$production_kuiper_ip}:9081/plugins/sinks

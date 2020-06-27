@@ -42,7 +42,7 @@ Kuiper 可以运行在各类物联网的边缘使用场景中，比如工业物�
 - 管理能力
 
   - 命令行对流、规则进行管理
-  - 通过 REST API 也可以流与规则进行管理（规划中）
+  - 通过 REST API 也可以对流、规则进行管理（规划中）
   - 与 [KubeEdge](https://github.com/kubeedge/kubeedge)、[K3s](https://github.com/rancher/k3s) 等基于边缘 Kubernetes 框架的集成能力
 
 - 与 EMQ X Edge 集成
@@ -53,6 +53,9 @@ Kuiper 可以运行在各类物联网的边缘使用场景中，比如工业物�
 
 - [Kuiper 5分钟快速入门](docs/zh_CN/quick_start_docker.md)
 - [EdgeX 规则引擎教程](docs/zh_CN/edgex/edgex_rule_engine_tutorial.md)
+
+## Slack
+加入我们的 [Slack](https://join.slack.com/t/emqx/shared_invite/zt-7xrracuf-GGdbNB1pARtaZKvv6IfTvw)，然后加入 [kuiper](https://emqx.slack.com/archives/C0138SZP23Y) 频道。
 
 ## 性能测试结果
 

@@ -9,37 +9,58 @@ import (
 )
 
 type AggregateFunctionValuer struct {
-	Data AggregateData
+	data    AggregateData
+	fv      *FunctionValuer
+	plugins map[string]api.Function
 }
 
-func (v AggregateFunctionValuer) Value(key string) (interface{}, bool) {
+//Should only be called by stream to make sure a single instance for an operation
+func NewAggregateFunctionValuers() (*FunctionValuer, *AggregateFunctionValuer) {
+	fv := &FunctionValuer{}
+	return fv, &AggregateFunctionValuer{
+		fv: fv,
+	}
+}
+
+func (v *AggregateFunctionValuer) SetData(data AggregateData) {
+	v.data = data
+}
+
+func (v *AggregateFunctionValuer) GetSingleCallValuer() CallValuer {
+	return v.fv
+}
+
+func (v *AggregateFunctionValuer) Value(key string) (interface{}, bool) {
 	return nil, false
 }
 
-func (v AggregateFunctionValuer) Meta(key string) (interface{}, bool) {
+func (v *AggregateFunctionValuer) Meta(key string) (interface{}, bool) {
 	return nil, false
 }
 
-func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interface{}, bool) {
+func (v *AggregateFunctionValuer) Call(name string, args []interface{}) (interface{}, bool) {
 	lowerName := strings.ToLower(name)
 	switch lowerName {
 	case "avg":
 		arg0 := args[0].([]interface{})
-		if len(arg0) > 0 {
+		c := getCount(arg0)
+		if c > 0 {
 			v := getFirstValidArg(arg0)
 			switch v.(type) {
 			case int, int64:
 				if r, err := sliceIntTotal(arg0); err != nil {
 					return err, false
 				} else {
-					return r / len(arg0), true
+					return r / c, true
 				}
 			case float64:
 				if r, err := sliceFloatTotal(arg0); err != nil {
 					return err, false
 				} else {
-					return r / float64(len(arg0)), true
+					return r / float64(c), true
 				}
+			case nil:
+				return nil, true
 			default:
 				return fmt.Errorf("run avg function error: found invalid arg %[1]T(%[1]v)", v), false
 			}
@@ -47,7 +68,7 @@ func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interfac
 		return 0, true
 	case "count":
 		arg0 := args[0].([]interface{})
-		return len(arg0), true
+		return getCount(arg0), true
 	case "max":
 		arg0 := args[0].([]interface{})
 		if len(arg0) > 0 {
@@ -77,6 +98,8 @@ func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interfac
 				} else {
 					return r, true
 				}
+			case nil:
+				return nil, true
 			default:
 				return fmt.Errorf("run max function error: found invalid arg %[1]T(%[1]v)", v), false
 			}
@@ -111,6 +134,8 @@ func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interfac
 				} else {
 					return r, true
 				}
+			case nil:
+				return nil, true
 			default:
 				return fmt.Errorf("run min function error: found invalid arg %[1]T(%[1]v)", v), false
 			}
@@ -133,6 +158,8 @@ func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interfac
 				} else {
 					return r, true
 				}
+			case nil:
+				return nil, true
 			default:
 				return fmt.Errorf("run sum function error: found invalid arg %[1]T(%[1]v)", v), false
 			}
@@ -140,25 +167,42 @@ func (v AggregateFunctionValuer) Call(name string, args []interface{}) (interfac
 		return 0, true
 	default:
 		common.Log.Debugf("run aggregate func %s", name)
-		if nf, err := plugins.GetPlugin(name, plugins.FUNCTION); err != nil {
-			return nil, false
-		} else {
-			f, ok := nf.(api.Function)
-			if !ok {
-				return nil, false
-			}
-			if !f.IsAggregate() {
-				return nil, false
-			}
-			result, ok := f.Exec(args)
-			common.Log.Debugf("run custom aggregate function %s, get result %v", name, result)
-			return result, ok
+		if v.plugins == nil {
+			v.plugins = make(map[string]api.Function)
 		}
+		var (
+			nf  api.Function
+			ok  bool
+			err error
+		)
+		if nf, ok = v.plugins[name]; !ok {
+			nf, err = plugins.GetFunction(name)
+			if err != nil {
+				return err, false
+			}
+			v.plugins[name] = nf
+		}
+		if !nf.IsAggregate() {
+			return nil, false
+		}
+		result, ok := nf.Exec(args)
+		common.Log.Debugf("run custom aggregate function %s, get result %v", name, result)
+		return result, ok
 	}
 }
 
+func getCount(s []interface{}) int {
+	c := 0
+	for _, v := range s {
+		if v != nil {
+			c++
+		}
+	}
+	return c
+}
+
 func (v *AggregateFunctionValuer) GetAllTuples() AggregateData {
-	return v.Data
+	return v.data
 }
 
 func getFirstValidArg(s []interface{}) interface{} {
@@ -175,7 +219,7 @@ func sliceIntTotal(s []interface{}) (int, error) {
 	for _, v := range s {
 		if vi, ok := v.(int); ok {
 			total += vi
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires int but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -187,7 +231,7 @@ func sliceFloatTotal(s []interface{}) (float64, error) {
 	for _, v := range s {
 		if vf, ok := v.(float64); ok {
 			total += vf
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires float64 but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -199,7 +243,7 @@ func sliceIntMax(s []interface{}, max int) (int, error) {
 			if max < vi {
 				max = vi
 			}
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires int but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -211,7 +255,7 @@ func sliceFloatMax(s []interface{}, max float64) (float64, error) {
 			if max < vf {
 				max = vf
 			}
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires float64 but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -224,7 +268,7 @@ func sliceStringMax(s []interface{}, max string) (string, error) {
 			if max < vs {
 				max = vs
 			}
-		} else {
+		} else if v != nil {
 			return "", fmt.Errorf("requires string but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -236,7 +280,7 @@ func sliceIntMin(s []interface{}, min int) (int, error) {
 			if min > vi {
 				min = vi
 			}
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires int but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -248,7 +292,7 @@ func sliceFloatMin(s []interface{}, min float64) (float64, error) {
 			if min > vf {
 				min = vf
 			}
-		} else {
+		} else if v != nil {
 			return 0, fmt.Errorf("requires float64 but found %[1]T(%[1]v)", v)
 		}
 	}
@@ -261,7 +305,7 @@ func sliceStringMin(s []interface{}, min string) (string, error) {
 			if min < vs {
 				min = vs
 			}
-		} else {
+		} else if v != nil {
 			return "", fmt.Errorf("requires string but found %[1]T(%[1]v)", v)
 		}
 	}

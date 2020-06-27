@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/emqx/kuiper/common"
 	"github.com/emqx/kuiper/plugins"
-	"github.com/emqx/kuiper/xstream/api"
 	"math"
 	"reflect"
 	"sort"
@@ -54,6 +53,8 @@ const (
 	FULL_JOIN
 	CROSS_JOIN
 )
+
+var COLUMN_SEPARATOR = tokens[COLSEP]
 
 type Join struct {
 	Name     string
@@ -235,6 +236,7 @@ const (
 	HOPPING_WINDOW
 	SLIDING_WINDOW
 	SESSION_WINDOW
+	COUNT_WINDOW
 )
 
 type Window struct {
@@ -297,9 +299,6 @@ type StreamStmt struct {
 
 func (ss *StreamStmt) node() {}
 func (ss *StreamStmt) Stmt() {}
-func (ss *StreamStmt) isSchemaless() bool {
-	return ss.StreamFields == nil
-}
 
 type FieldType interface {
 	fieldType()
@@ -493,6 +492,7 @@ type CallValuer interface {
 type AggregateCallValuer interface {
 	CallValuer
 	GetAllTuples() AggregateData
+	GetSingleCallValuer() CallValuer
 }
 
 type Wildcarder interface {
@@ -514,7 +514,7 @@ func (wv *WildcardValuer) Value(key string) (interface{}, bool) {
 	if key == "" {
 		return wv.Data.All(key)
 	} else {
-		a := strings.Index(key, ".*")
+		a := strings.Index(key, COLUMN_SEPARATOR+"*")
 		if a <= 0 {
 			return nil, false
 		} else {
@@ -532,7 +532,7 @@ func (wv *WildcardValuer) Meta(key string) (interface{}, bool) {
  */
 
 type AggregateData interface {
-	AggregateEval(expr Expr) []interface{}
+	AggregateEval(expr Expr, v CallValuer) []interface{}
 }
 
 // Message is a valuer that substitutes values for the mapped interface.
@@ -540,15 +540,34 @@ type Message map[string]interface{}
 
 // Value returns the value for a key in the Message.
 func (m Message) Value(key string) (interface{}, bool) {
-	key = strings.ToLower(key)
-	if keys := strings.Split(key, "."); len(keys) == 1 {
-		v, ok := m[key]
-		return v, ok
+	var colkey string
+	if keys := strings.Split(key, COLUMN_SEPARATOR); len(keys) == 1 {
+		colkey = key
 	} else if len(keys) == 2 {
-		v, ok := m[keys[1]]
-		return v, ok
+		colkey = keys[1]
+	} else {
+		common.Log.Println("Invalid key: " + key + ", expect source.field or field.")
+		return nil, false
 	}
-	common.Log.Println("Invalid key: " + key + ", expect source.field or field.")
+	key1 := strings.ToLower(colkey)
+	if v, ok := m[key1]; ok {
+		return v, ok
+	} else {
+		//Only when with 'SELECT * FROM ...'  and 'schemaless', the key in map is not convert to lower case.
+		//So all of keys in map should be convert to lowercase and then compare them.
+		return m.getIgnoreCase(colkey)
+	}
+}
+
+func (m Message) getIgnoreCase(key interface{}) (interface{}, bool) {
+	if k, ok := key.(string); ok {
+		key = strings.ToLower(k)
+		for k, v := range m {
+			if strings.ToLower(k) == key {
+				return v, true
+			}
+		}
+	}
 	return nil, false
 }
 
@@ -601,8 +620,8 @@ func (t *Tuple) All(stream string) (interface{}, bool) {
 	return t.Message, true
 }
 
-func (t *Tuple) AggregateEval(expr Expr) []interface{} {
-	return []interface{}{Eval(expr, t)}
+func (t *Tuple) AggregateEval(expr Expr, v CallValuer) []interface{} {
+	return []interface{}{Eval(expr, t, v)}
 }
 
 func (t *Tuple) GetTimestamp() int64 {
@@ -683,13 +702,13 @@ func (w WindowTuplesSet) Sort() {
 	}
 }
 
-func (w WindowTuplesSet) AggregateEval(expr Expr) []interface{} {
+func (w WindowTuplesSet) AggregateEval(expr Expr, v CallValuer) []interface{} {
 	var result []interface{}
 	if len(w) != 1 { //should never happen
 		return nil
 	}
 	for _, t := range w[0].Tuples {
-		result = append(result, Eval(expr, &t))
+		result = append(result, Eval(expr, &t, v))
 	}
 	return result
 }
@@ -721,7 +740,7 @@ func getTupleValue(tuple Tuple, t string, key string) (interface{}, bool) {
 }
 
 func (jt *JoinTuple) doGetValue(t string, key string) (interface{}, bool) {
-	keys := strings.Split(key, ".")
+	keys := strings.Split(key, COLUMN_SEPARATOR)
 	tuples := jt.Tuples
 	switch len(keys) {
 	case 1:
@@ -787,20 +806,20 @@ func (s JoinTupleSets) Len() int           { return len(s) }
 func (s JoinTupleSets) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s JoinTupleSets) Index(i int) Valuer { return &(s[i]) }
 
-func (s JoinTupleSets) AggregateEval(expr Expr) []interface{} {
+func (s JoinTupleSets) AggregateEval(expr Expr, v CallValuer) []interface{} {
 	var result []interface{}
 	for _, t := range s {
-		result = append(result, Eval(expr, &t))
+		result = append(result, Eval(expr, &t, v))
 	}
 	return result
 }
 
 type GroupedTuples []DataValuer
 
-func (s GroupedTuples) AggregateEval(expr Expr) []interface{} {
+func (s GroupedTuples) AggregateEval(expr Expr, v CallValuer) []interface{} {
 	var result []interface{}
 	for _, t := range s {
-		result = append(result, Eval(expr, t))
+		result = append(result, Eval(expr, t, v))
 	}
 	return result
 }
@@ -821,14 +840,16 @@ type SortingData interface {
 type MultiSorter struct {
 	SortingData
 	fields SortFields
+	valuer CallValuer
 	values []map[string]interface{}
 }
 
 // OrderedBy returns a Sorter that sorts using the less functions, in order.
 // Call its Sort method to sort the data.
-func OrderedBy(fields SortFields) *MultiSorter {
+func OrderedBy(fields SortFields, fv *FunctionValuer) *MultiSorter {
 	return &MultiSorter{
 		fields: fields,
+		valuer: fv,
 	}
 }
 
@@ -840,7 +861,7 @@ func OrderedBy(fields SortFields) *MultiSorter {
 // exercise for the reader.
 func (ms *MultiSorter) Less(i, j int) bool {
 	p, q := ms.values[i], ms.values[j]
-	v := &ValuerEval{Valuer: MultiValuer(&FunctionValuer{})}
+	v := &ValuerEval{Valuer: MultiValuer(ms.valuer)}
 	for _, field := range ms.fields {
 		n := field.Name
 		vp, _ := p[n]
@@ -880,7 +901,7 @@ func (ms *MultiSorter) Sort(data SortingData) error {
 	for i := 0; i < data.Len(); i++ {
 		ms.values[i] = make(map[string]interface{})
 		p := data.Index(i)
-		vep := &ValuerEval{Valuer: MultiValuer(p, &FunctionValuer{})}
+		vep := &ValuerEval{Valuer: MultiValuer(p, ms.valuer)}
 		for j, field := range ms.fields {
 			n := field.Name
 			vp, _ := vep.Valuer.Value(n)
@@ -948,8 +969,8 @@ type EvalResultMessage struct {
 type ResultsAndMessages []EvalResultMessage
 
 // Eval evaluates expr against a map.
-func Eval(expr Expr, m Valuer) interface{} {
-	eval := ValuerEval{Valuer: MultiValuer(m, &FunctionValuer{})}
+func Eval(expr Expr, m Valuer, v CallValuer) interface{} {
+	eval := ValuerEval{Valuer: MultiValuer(m, v)}
 	return eval.Eval(expr)
 }
 
@@ -1004,12 +1025,14 @@ func (a multiValuer) Call(name string, args []interface{}) (interface{}, bool) {
 type multiAggregateValuer struct {
 	data AggregateData
 	multiValuer
+	singleCallValuer CallValuer
 }
 
-func MultiAggregateValuer(data AggregateData, valuers ...Valuer) Valuer {
+func MultiAggregateValuer(data AggregateData, singleCallValuer CallValuer, valuers ...Valuer) Valuer {
 	return &multiAggregateValuer{
-		data:        data,
-		multiValuer: valuers,
+		data:             data,
+		multiValuer:      valuers,
+		singleCallValuer: singleCallValuer,
 	}
 }
 
@@ -1044,6 +1067,10 @@ func (a *multiAggregateValuer) Call(name string, args []interface{}) (interface{
 
 func (a *multiAggregateValuer) GetAllTuples() AggregateData {
 	return a.data
+}
+
+func (a *multiAggregateValuer) GetSingleCallValuer() CallValuer {
+	return a.singleCallValuer
 }
 
 type BracketEvalResult struct {
@@ -1086,7 +1113,7 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 				args = make([]interface{}, len(expr.Args))
 				if aggreValuer, ok := valuer.(AggregateCallValuer); ok {
 					for i := range expr.Args {
-						args[i] = aggreValuer.GetAllTuples().AggregateEval(expr.Args[i])
+						args[i] = aggreValuer.GetAllTuples().AggregateEval(expr.Args[i], aggreValuer.GetSingleCallValuer())
 					}
 				} else {
 					for i := range expr.Args {
@@ -1107,7 +1134,7 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 			return val
 		} else {
 			//The field specified with stream source
-			val, _ := v.Valuer.Value(string(expr.StreamName) + "." + expr.Name)
+			val, _ := v.Valuer.Value(string(expr.StreamName) + COLUMN_SEPARATOR + expr.Name)
 			return val
 		}
 	case *MetaRef:
@@ -1116,7 +1143,7 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 			return val
 		} else {
 			//The field specified with stream source
-			val, _ := v.Valuer.Meta(string(expr.StreamName) + "." + expr.Name)
+			val, _ := v.Valuer.Meta(string(expr.StreamName) + COLUMN_SEPARATOR + expr.Name)
 			return val
 		}
 	case *Wildcard:
@@ -1700,8 +1727,8 @@ func isAggFunc(f *Call) bool {
 	} else if _, ok := mathFuncMap[fn]; ok {
 		return false
 	} else {
-		if nf, err := plugins.GetPlugin(f.Name, plugins.FUNCTION); err == nil {
-			if ef, ok := nf.(api.Function); ok && ef.IsAggregate() {
+		if nf, err := plugins.GetFunction(f.Name); err == nil {
+			if nf.IsAggregate() {
 				return true
 			}
 		}

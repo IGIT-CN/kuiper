@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-type FunctionValuer struct{}
+type FunctionValuer struct {
+	plugins map[string]api.Function
+}
 
 func (*FunctionValuer) Value(key string) (interface{}, bool) {
 	return nil, false
@@ -56,11 +58,15 @@ var hashFuncMap = map[string]string{"md5": "",
 	"sha1": "", "sha256": "", "sha384": "", "sha512": "",
 }
 
-var otherFuncMap = map[string]string{"isnull": "",
-	"newuuid": "", "timestamp": "", "mqtt": "", "meta": "",
+var jsonFuncMap = map[string]string{
+	"json_path_query": "", "json_path_query_first": "", "json_path_exists": "",
 }
 
-func (*FunctionValuer) Call(name string, args []interface{}) (interface{}, bool) {
+var otherFuncMap = map[string]string{"isnull": "",
+	"newuuid": "", "tstamp": "", "mqtt": "", "meta": "",
+}
+
+func (fv *FunctionValuer) Call(name string, args []interface{}) (interface{}, bool) {
 	lowerName := strings.ToLower(name)
 	if _, ok := mathFuncMap[lowerName]; ok {
 		return mathCall(name, args)
@@ -70,25 +76,34 @@ func (*FunctionValuer) Call(name string, args []interface{}) (interface{}, bool)
 		return convCall(lowerName, args)
 	} else if _, ok := hashFuncMap[lowerName]; ok {
 		return hashCall(lowerName, args)
+	} else if _, ok := jsonFuncMap[lowerName]; ok {
+		return jsonCall(lowerName, args)
 	} else if _, ok := otherFuncMap[lowerName]; ok {
 		return otherCall(lowerName, args)
 	} else if _, ok := aggFuncMap[lowerName]; ok {
 		return nil, false
 	} else {
 		common.Log.Debugf("run func %s", name)
-		if nf, err := plugins.GetPlugin(name, plugins.FUNCTION); err != nil {
-			return err, false
-		} else {
-			f, ok := nf.(api.Function)
-			if !ok {
-				return nil, false
-			}
-			if f.IsAggregate() {
-				return nil, false
-			}
-			result, ok := f.Exec(args)
-			common.Log.Debugf("run custom function %s, get result %v", name, result)
-			return result, ok
+		if fv.plugins == nil {
+			fv.plugins = make(map[string]api.Function)
 		}
+		var (
+			nf  api.Function
+			ok  bool
+			err error
+		)
+		if nf, ok = fv.plugins[name]; !ok {
+			nf, err = plugins.GetFunction(name)
+			if err != nil {
+				return err, false
+			}
+			fv.plugins[name] = nf
+		}
+		if nf.IsAggregate() {
+			return nil, false
+		}
+		result, ok := nf.Exec(args)
+		common.Log.Debugf("run custom function %s, get result %v", name, result)
+		return result, ok
 	}
 }

@@ -252,6 +252,76 @@ func TestFilterPlan_Apply(t *testing.T) {
 				},
 			},
 		},
+		{
+			sql: `SELECT abc FROM tbl WHERE json_path_exists(samplers, "$[? @.result.throughput==30]")`,
+			data: &xsql.Tuple{
+				Emitter: "tbl",
+				Message: xsql.Message{
+					"samplers": []interface{}{
+						map[string]interface{}{
+							"name": "page1",
+							"result": map[string]interface{}{
+								"throughput": float64(25),
+								"rt":         float64(20),
+							},
+						},
+						map[string]interface{}{
+							"name": "page2",
+							"result": map[string]interface{}{
+								"throughput": float64(30),
+								"rt":         float64(20),
+							},
+						},
+					},
+				},
+			},
+			result: &xsql.Tuple{
+				Emitter: "tbl",
+				Message: xsql.Message{
+					"samplers": []interface{}{
+						map[string]interface{}{
+							"name": "page1",
+							"result": map[string]interface{}{
+								"throughput": float64(25),
+								"rt":         float64(20),
+							},
+						},
+						map[string]interface{}{
+							"name": "page2",
+							"result": map[string]interface{}{
+								"throughput": float64(30),
+								"rt":         float64(20),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			sql: `SELECT abc FROM tbl WHERE json_path_exists(samplers, "$[? @.result.throughput<20]")`,
+			data: &xsql.Tuple{
+				Emitter: "tbl",
+				Message: xsql.Message{
+					"samplers": []interface{}{
+						map[string]interface{}{
+							"name": "page1",
+							"result": map[string]interface{}{
+								"throughput": 25,
+								"rt":         20,
+							},
+						},
+						map[string]interface{}{
+							"name": "page2",
+							"result": map[string]interface{}{
+								"throughput": 30,
+								"rt":         20,
+							},
+						},
+					},
+				},
+			},
+			result: nil,
+		},
 	}
 
 	fmt.Printf("The test bucket size is %d.\n\n", len(tests))
@@ -263,9 +333,9 @@ func TestFilterPlan_Apply(t *testing.T) {
 			t.Errorf("statement parse error %s", err)
 			break
 		}
-
+		fv, afv := xsql.NewAggregateFunctionValuers()
 		pp := &FilterPlan{Condition: stmt.Condition}
-		result := pp.Apply(ctx, tt.data)
+		result := pp.Apply(ctx, tt.data, fv, afv)
 		if !reflect.DeepEqual(tt.result, result) {
 			t.Errorf("%d. %q\n\nresult mismatch:\n\nexp=%#v\n\ngot=%#v\n\n", i, tt.sql, tt.result, result)
 		}
@@ -386,9 +456,9 @@ func TestFilterPlanError(t *testing.T) {
 			t.Errorf("statement parse error %s", err)
 			break
 		}
-
+		fv, afv := xsql.NewAggregateFunctionValuers()
 		pp := &FilterPlan{Condition: stmt.Condition}
-		result := pp.Apply(ctx, tt.data)
+		result := pp.Apply(ctx, tt.data, fv, afv)
 		if !reflect.DeepEqual(tt.result, result) {
 			t.Errorf("%d. %q\n\nresult mismatch:\n\nexp=%#v\n\ngot=%#v\n\n", i, tt.sql, tt.result, result)
 		}
